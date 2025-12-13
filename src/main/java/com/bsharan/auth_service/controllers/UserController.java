@@ -2,10 +2,10 @@ package com.bsharan.auth_service.controllers;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -24,27 +24,41 @@ public class UserController {
     private final UserService userService;
 
     @GetMapping
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Iterable<UserDto>> getAllUsers() {
         return ResponseEntity.status(HttpStatus.OK).body(userService.getAllUsers());
     }
 
-    @GetMapping("/email/{emailId}")
-    public ResponseEntity<UserDto> getUserByEmail(@PathVariable String emailId) {
-        return ResponseEntity.status(HttpStatus.OK).body(userService.getUserByEmail(emailId));
+    @GetMapping("/email/{email}")
+    @PreAuthorize("""
+        hasRole('ADMIN') or
+        #email == authentication.name
+    """)
+    public ResponseEntity<UserDto> getUserByEmail(@PathVariable String email) {
+        return ResponseEntity.status(HttpStatus.OK).body(userService.getUserByEmail(email));
     }
 
     @GetMapping("/id/{userId}")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<UserDto> getUserById(@PathVariable String userId) {
         return ResponseEntity.status(HttpStatus.OK).body(userService.getUserById(userId));
     }
 
     @DeleteMapping("/{userId}")
+    @PreAuthorize("""
+    hasRole('ADMIN') or
+    (hasRole('USER') and @userSecurity.isOwner(#id))
+    """)
     public void deleteUserById(@PathVariable String userId) {
         userService.deleteUser(userId);
     }
 
     @PutMapping("/{userId}")
-    public ResponseEntity<UserDto> getUserById(@RequestBody UserDto userDto, @PathVariable String userId) {
+    @PreAuthorize("""
+    hasRole('ADMIN') or
+    (hasRole('USER') and @userSecurity.isOwner(#userId))
+    """)
+    public ResponseEntity<UserDto> updateUserById(@RequestBody UserDto userDto, @PathVariable String userId) {
         return ResponseEntity.status(HttpStatus.OK).body(userService.updateUser(userDto, userId));
     }
 }

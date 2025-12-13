@@ -3,10 +3,12 @@ package com.bsharan.auth_service.services.implementations;
 import java.util.UUID;
 
 import org.modelmapper.ModelMapper;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import com.bsharan.auth_service.dtos.UserDto;
 import com.bsharan.auth_service.entities.User;
+import com.bsharan.auth_service.enums.Provider;
 import com.bsharan.auth_service.exceptions.ResourceNotFoundException;
 import com.bsharan.auth_service.repositories.UserRepository;
 import com.bsharan.auth_service.services.UserService;
@@ -18,56 +20,69 @@ import lombok.RequiredArgsConstructor;
 @Service
 @RequiredArgsConstructor
 public class UserServiceImpl implements UserService {
-    
-    private final UserRepository userRepository;
 
+    private final UserRepository userRepository;
     private final ModelMapper modelMapper;
+    private final PasswordEncoder passwordEncoder;
 
     @Override
     @Transactional
     public UserDto createUser(UserDto userDto) {
 
-        if (userDto.getEmail().isEmpty())
+        if (userDto.getEmail() == null || userDto.getEmail().isBlank()) {
             throw new IllegalArgumentException("Email is required");
+        }
 
-        if (userRepository.existsByEmail(userDto.getEmail()))
+        if (userDto.getPassword() == null || userDto.getPassword().isBlank()) {
+            throw new IllegalArgumentException("Password is required");
+        }
+
+        if (userRepository.existsByEmail(userDto.getEmail())) {
             throw new IllegalArgumentException("Email already exists");
+        }
 
         User user = modelMapper.map(userDto, User.class);
-        User savedUser = userRepository.save(user);
+        user.setPassword(passwordEncoder.encode(userDto.getPassword()));
+        user.setEnabled(true);
+        user.setProvider(Provider.LOCAL);
 
+        User savedUser = userRepository.save(user);
         return modelMapper.map(savedUser, UserDto.class);
     }
 
     @Override
     public UserDto getUserByEmail(String email) {
-        User user = userRepository
-                .findByEmail(email)
-                .orElseThrow(() -> {
-            return new ResourceNotFoundException("user with given emailId is not found");
-        });
-
+        User user = userRepository.findByEmail(email)
+            .orElseThrow(() ->
+                new ResourceNotFoundException("User not found"));
         return modelMapper.map(user, UserDto.class);
     }
-    
+
     @Override
+    public UserDto getUserById(String userId) {
+        UUID uuid = Utils.parseUUID(userId);
+        User user = userRepository.findById(uuid)
+            .orElseThrow(() ->
+                new ResourceNotFoundException("User not found"));
+        return modelMapper.map(user, UserDto.class);
+    }
+
+    @Override
+    @Transactional
     public UserDto updateUser(UserDto userDto, String userId) {
-        UUID uuID = Utils.parseUUID(userId);
-        User existingUser = userRepository
-                .findById(uuID)
-                .orElseThrow(() -> {
-            return new ResourceNotFoundException("user with given emailId is not found");
-                });
-        
-        if (userDto.getName() != null)
+
+        UUID uuid = Utils.parseUUID(userId);
+        User existingUser = userRepository.findById(uuid)
+            .orElseThrow(() ->
+                new ResourceNotFoundException("User not found"));
+
+        if (userDto.getName() != null) {
             existingUser.setName(userDto.getName());
-        if (userDto.getProvider() != null)
-            existingUser.setProvider(userDto.getProvider());
-        if (userDto.getImage() != null)
+        }
+
+        if (userDto.getImage() != null) {
             existingUser.setImage(userDto.getImage());
-        if (userDto.getPassword() != null)
-            existingUser.setPassword(userDto.getPassword());
-        existingUser.setEnabled(userDto.isEnabled());
+        }
 
         User updatedUser = userRepository.save(existingUser);
         return modelMapper.map(updatedUser, UserDto.class);
@@ -75,29 +90,19 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public void deleteUser(String userId) {
-        UUID uuID = Utils.parseUUID(userId);
-        User user = userRepository.findById(uuID).orElseThrow(() -> {
-            return new ResourceNotFoundException("user with given userId is not found");
-        });
+        UUID uuid = Utils.parseUUID(userId);
+        User user = userRepository.findById(uuid)
+            .orElseThrow(() ->
+                new ResourceNotFoundException("User not found"));
         userRepository.delete(user);
     }
 
     @Override
-    public UserDto getUserById(String userId) {
-        User user = userRepository.findById(Utils.parseUUID(userId)).orElseThrow(()->{
-            return new ResourceNotFoundException("user with given userId is not found");
-        });
-        return modelMapper.map(user, UserDto.class);
-    }
-
-    @Override
-    @Transactional
     public Iterable<UserDto> getAllUsers() {
-        return userRepository
-                .findAll()
-                .stream()
-                .map(user -> modelMapper.map(user, UserDto.class))
-                .toList();
+        return userRepository.findAll()
+            .stream()
+            .map(user -> modelMapper.map(user, UserDto.class))
+            .toList();
     }
-    
 }
+
