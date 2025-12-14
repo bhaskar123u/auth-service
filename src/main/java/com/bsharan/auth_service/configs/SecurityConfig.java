@@ -51,12 +51,6 @@ public class SecurityConfig {
             )
             // Logout clears HttpSession(SecurityContext) + Remove session cookie
             .logout(logout -> logout
-                .logoutUrl("/logout")
-                .invalidateHttpSession(true)
-                .clearAuthentication(true)
-                .deleteCookies("JSESSIONID")
-            )
-            .logout(logout -> logout
                 .logoutUrl("/logout")              // API endpoint
                 .invalidateHttpSession(true)       // Destroy HttpSession
                 .clearAuthentication(true)         // Clear SecurityContext

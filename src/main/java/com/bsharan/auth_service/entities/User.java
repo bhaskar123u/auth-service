@@ -5,8 +5,6 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 
-import org.hibernate.Hibernate;
-
 import com.bsharan.auth_service.enums.Provider;
 import com.bsharan.auth_service.enums.Role;
 
