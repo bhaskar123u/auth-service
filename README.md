@@ -476,3 +476,4 @@ Client (Browser / Postman / Service)
 │ - Returns 403 Forbidden                        │
 │ - User authenticated but not authorized        │
 └────────────────────────────────────────────────┘
+

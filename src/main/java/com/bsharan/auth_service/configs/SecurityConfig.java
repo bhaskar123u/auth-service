@@ -75,7 +75,7 @@ public class SecurityConfig {
                     response.getWriter().write("""
                         {
                         "status": 401,
-                        "message": "Please login to access this resource"
+                        "message": "(Filter-Level) Please login to access this resource"
                         }
                     """);
                 })
@@ -90,7 +90,7 @@ public class SecurityConfig {
                     response.getWriter().write("""
                         {
                         "status": 403,
-                        "message": "You are not authorized to access this API: %s"
+                        "message": "(Filter-Level) You are not authorized to access this API: %s"
                         }
                     """.formatted(apiPath));
                 })
