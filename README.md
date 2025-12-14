@@ -1,5 +1,5 @@
 # Spring Boot Authentication & Spring Security – Learning Project
-[Session Based Login flow](src/main/resources/Session based security.png)
+![Session Based Login flow](src/main/resources/Session based security.png)
 
 This repository is a **hands-on learning project** focused on understanding **authentication, authorization, and Spring Security internals** using Spring Boot.
 
