@@ -12,18 +12,18 @@ import org.springframework.security.web.SecurityFilterChain;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 
-@Configuration
-@EnableWebSecurity
-@EnableMethodSecurity(prePostEnabled = true)
-@RequiredArgsConstructor
+// @Configuration
+// @EnableWebSecurity
+// @EnableMethodSecurity(prePostEnabled = true)
+// @RequiredArgsConstructor
 public class SecurityConfig {
 
-    @Bean
+    // @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
-    @Bean
+    // @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
 
         http

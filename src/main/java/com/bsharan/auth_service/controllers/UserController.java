@@ -29,13 +29,13 @@ public class UserController {
         return ResponseEntity.status(HttpStatus.OK).body(userService.getAllUsers());
     }
 
-    @GetMapping("/email/{email}")
+    @GetMapping("/email/{emailId}")
     @PreAuthorize("""
         hasRole('ADMIN') or
-        #email == authentication.name
+        #emailId == authentication.name
     """)
-    public ResponseEntity<UserDto> getUserByEmail(@PathVariable String email) {
-        return ResponseEntity.status(HttpStatus.OK).body(userService.getUserByEmail(email));
+    public ResponseEntity<UserDto> getUserByEmail(@PathVariable String emailId) {
+        return ResponseEntity.status(HttpStatus.OK).body(userService.getUserByEmail(emailId));
     }
 
     @GetMapping("/id/{userId}")
@@ -47,7 +47,7 @@ public class UserController {
     @DeleteMapping("/{userId}")
     @PreAuthorize("""
     hasRole('ADMIN') or
-    (hasRole('USER') and @userSecurity.isOwner(#id))
+    (hasRole('USER') and @userSecurity.isOwner(#userId))
     """)
     public void deleteUserById(@PathVariable String userId) {
         userService.deleteUser(userId);

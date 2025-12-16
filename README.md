@@ -476,4 +476,100 @@ Client (Browser / Postman / Service)
 │ - Returns 403 Forbidden                        │
 │ - User authenticated but not authorized        │
 └────────────────────────────────────────────────┘
+```
 
+---
+
+## JWT
+
+### Motivation
+
+HttpSession-based authentication works well when a single application instance (or sticky sessions) is used.
+
+In this model: The client sends a JSESSIONID with every request. The server uses it to retrieve the HttpSession. The session contains the SecurityContext (authenticated user + roles). If 10K users are logged in, the server holds ~10K session objects in memory (or session store).
+
+However, in a distributed / horizontally scaled setup: Multiple application instances run behind a load balancer. Requests from the same user can land on any instance. HttpSession data is not shared by default across instances
+
+As a result: An instance may receive a valid JSESSIONID. But it may not have the corresponding session. The server cannot reconstruct the SecurityContext
+
+Authentication fails unless: Sticky sessions are used, or Sessions are externally shared (Redis, DB, etc.). To avoid server-side session state and enable true horizontal scalability, a stateless authentication mechanism is required.
+
+
+### Structure
+
+JWT = HEADER.PAYLOAD.SIGNATURE
+
+Header (encoded)
+```json
+{
+  "alg": "HS256",
+  "typ": "JWT"
+}
+```
+
+Payload (encoded)
+```json
+{
+  "sub": "abc@gmail.com",
+  "roles": ["USER"],
+  "iat": 1700000000,
+  "exp": 1700000900,
+  "iss": "auth-service"
+}
+```
+
+Signature (this is main security)
+```text
+HMAC-SHA256(
+  base64(header) + "." + base64(payload),
+  SECRET_KEY <--- needed for unique identification, it should be protected in vault and should not reach wrong hands
+)
+```
+
+Final JWT created
+```text
+eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJiaGFza2FyMTIzdUBnbWFpbC5jb20iLCJyb2xlcyI6WyJVU0VSIl0sImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoxNzAwMDAwOTAwLCJpc3MiOiJhdXRoLXNlcnZpY2UifQ.<signature>
+```
+
+Encoding vs Hashing :
+```text
+Encoding - I love you {A: 01, B: 02, C: 03...}
+Result - 09 29 .. .. .. -> This is reversible, you can recreate -> I love you
+
+Hashing - I love you -> some logic : for each character do sum of (ASCII + some integer), mod with 10^9+7.
+Result - some number. -> This is irreversible, you cannot recreate -> I love you
+```
+
+### E2E flow in distributed system
+
+Assume a user (abc@gmail.com) logs in (/login) and reaches server 1. He is a real user and is authenticated in system. JWT is created for him assume -> efefewfe.d2e32#R4.DWD9*&hJd. Now this is sent back to the client and how it's the client duty to tell servers who it is. Earlier it was the servers responsibilty to make sure that the user is verified with JSESSIONID. Now assume the user hit a protected api (/profile/{profileId}). The JWT token is sent along. Following happens at server's end :
+
+HEADER.PAYLOAD.SIGNATURE = efefewfe.d2e32#R4.DWD9*&hJd
+
+efefewfe ---(decoded)---> some value (SV1)
+d2e32#R4 ---(decoded)---> some value (SV2)
+
+signature is calculated
+
+```text
+HMAC-SHA256(
+  base64(SV1) + "." + base64(SV2),
+  SECRET_KEY
+)
+```
+If this matches DWD9*&hJd -> this is a genuine request.
+
+### Key Management
+
+To sign the JWT we can use HMAC-SHA256 / RSA
+With RSA: Private key → used to sign JWT, Public key → used to verify JWT
+
+Important consequence: Only the auth service needs the private key. Other services / instances can verify using public key only. Even if public key leaks → cannot forge tokens. This directly fixes the “shared secret blast radius” problem. 
+
+Any instance can: Verify JWT using public key
+
+Only auth-service instances can: Sign JWT using private key. No sticky sessions. No shared memory. No Redis needed for auth state
+
+Vault should: Generate RSA key pair. Keep private key secret. Expose public key safely
+
+App should: Never generate keys. Never store private key in repo. Only read from Vault

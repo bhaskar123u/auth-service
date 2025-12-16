@@ -10,7 +10,7 @@ import com.bsharan.auth_service.repositories.UserRepository;
 
 import lombok.RequiredArgsConstructor;
 
-@Service
+// @Service
 @RequiredArgsConstructor
 public class CustomUserDetailsService implements UserDetailsService {
 
