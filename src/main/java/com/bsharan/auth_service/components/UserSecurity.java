@@ -17,12 +17,17 @@ public class UserSecurity {
     private final UserRepository userRepository;
 
     public boolean isOwner(String userId) {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        String loggedInEmail = auth.getName();
 
-        return userRepository.findById(UUID.fromString(userId))
-            .map(user -> user.getEmail().equals(loggedInEmail))
-            .orElse(false);
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || auth.getName() == null) {
+            return false;
+        }
+
+        String email = auth.getName(); // principal = email (LOCKED)
+
+        return userRepository
+                .findByEmail(email)
+                .map(user -> user.getId().equals(UUID.fromString(userId)))
+                .orElse(false);
     }
 }
-

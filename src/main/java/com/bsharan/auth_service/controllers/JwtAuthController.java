@@ -1,66 +1,67 @@
 package com.bsharan.auth_service.controllers;
 
+import com.bsharan.auth_service.dtos.JwtLoginRequest;
+import com.bsharan.auth_service.dtos.JwtLoginResponse;
+import com.bsharan.auth_service.jwtSecurity.jwt.JwtTokenService;
+import com.bsharan.auth_service.jwtSecurity.jwt.TokenBlacklist;
+import com.bsharan.auth_service.jwtSecurity.userdetails.JwtUserDetails;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-import com.bsharan.auth_service.dtos.JwtLoginRequest;
-import com.bsharan.auth_service.dtos.JwtLoginResponse;
-import com.bsharan.auth_service.jwtSecurity.jwt.JwtTokenService;
-
-import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequiredArgsConstructor
 @RequestMapping("/api/v1/auth/jwt")
+@RequiredArgsConstructor
 public class JwtAuthController {
+
     private final AuthenticationManager authenticationManager;
     private final JwtTokenService jwtTokenService;
+    private final TokenBlacklist tokenBlacklist;
 
     @PostMapping("/login")
-    public ResponseEntity<JwtLoginResponse> jwtLogin(
-            @RequestBody JwtLoginRequest request) {
+    public ResponseEntity<JwtLoginResponse> login(
+            @RequestBody JwtLoginRequest request
+    ) throws Exception {
 
-        // creates unauthenticated token and passed to authenticationManager, authenticationManager passes it to applicable provider
-        Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(
-                        request.getEmail(),
-                        request.getPassword()
+        Authentication authentication =
+                authenticationManager.authenticate(
+                        new UsernamePasswordAuthenticationToken(
+                                request.getEmail(),
+                                request.getPassword()
+                        )
+                );
+
+        JwtUserDetails principal =
+                (JwtUserDetails) authentication.getPrincipal();
+
+        String token = jwtTokenService.generateToken(
+                principal.getUserId(),
+                principal.getEmail(),
+                principal.getAuthorities()
+                        .stream()
+                        .map(a -> a.getAuthority())
+                        .toList()
+        );
+
+        return ResponseEntity.ok(
+                new JwtLoginResponse(
+                        token,
+                        "Bearer",
+                        jwtTokenService.getExpiryEpochSeconds()
                 )
-            );
-        /*
-            A carrier object is created with following details
-        
-            authenticated = false
-            principal = email
-            credentials = password
-            
-            internally ProviderManager.authenticate() is invoked as
-            for (AuthenticationProvider provider : providers) {
-                if (provider.supports(authentication.getClass())) 
-                {
-                    return provider.authenticate(authentication);
-                }                
-            }
-        
-            Each AuthenticationProvider implements: boolean supports(Class<?> authentication)
-            for UsernamePasswordAuthenticationToken -> DaoAuthenticationProvider
-        
-            UsernamePasswordAuthenticationToken (unauthenticated)
-                    ↓
-            DaoAuthenticationProvider (will use JwtUserDetailsService)
-                    ↓
-            UsernamePasswordAuthenticationToken (authenticated)
-        */
+        );
+    }
 
-        
-        JwtLoginResponse response = jwtTokenService.createJwtToken(authentication);
-
-        return ResponseEntity.ok(response);
+    @PostMapping("/logout")
+    public ResponseEntity<Void> logout(
+            @RequestHeader("Authorization") String auth
+    ) {
+        if (auth != null && auth.startsWith("Bearer ")) {
+            tokenBlacklist.blacklist(auth.substring(7));
+        }
+        return ResponseEntity.ok().build();
     }
 }

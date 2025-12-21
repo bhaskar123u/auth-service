@@ -1,24 +1,15 @@
 package com.bsharan.auth_service.controllers;
 
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
 import com.bsharan.auth_service.dtos.UserDto;
 import com.bsharan.auth_service.services.UserService;
-
-import lombok.AllArgsConstructor;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
-@AllArgsConstructor
 @RequestMapping("/api/v1/users")
+@RequiredArgsConstructor
 public class UserController {
 
     private final UserService userService;
@@ -26,39 +17,46 @@ public class UserController {
     @GetMapping
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Iterable<UserDto>> getAllUsers() {
-        return ResponseEntity.status(HttpStatus.OK).body(userService.getAllUsers());
+        return ResponseEntity.ok(userService.getAllUsers());
     }
 
-    @GetMapping("/email/{emailId}")
+    @GetMapping("/email/{email}")
     @PreAuthorize("""
         hasRole('ADMIN') or
-        #emailId == authentication.name
+        #email == authentication.name
     """)
-    public ResponseEntity<UserDto> getUserByEmail(@PathVariable String emailId) {
-        return ResponseEntity.status(HttpStatus.OK).body(userService.getUserByEmail(emailId));
+    public ResponseEntity<UserDto> getUserByEmail(@PathVariable String email) {
+        return ResponseEntity.ok(userService.getUserByEmail(email));
     }
 
     @GetMapping("/id/{userId}")
-    @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<UserDto> getUserById(@PathVariable String userId) {
-        return ResponseEntity.status(HttpStatus.OK).body(userService.getUserById(userId));
-    }
-
-    @DeleteMapping("/{userId}")
     @PreAuthorize("""
-    hasRole('ADMIN') or
-    (hasRole('USER') and @userSecurity.isOwner(#userId))
+        hasRole('ADMIN') or
+        @userSecurity.isOwner(#userId)
     """)
-    public void deleteUserById(@PathVariable String userId) {
-        userService.deleteUser(userId);
+    public ResponseEntity<UserDto> getUserById(@PathVariable String userId) {
+        return ResponseEntity.ok(userService.getUserById(userId));
     }
 
     @PutMapping("/{userId}")
     @PreAuthorize("""
-    hasRole('ADMIN') or
-    (hasRole('USER') and @userSecurity.isOwner(#userId))
+        hasRole('ADMIN') or
+        @userSecurity.isOwner(#userId)
     """)
-    public ResponseEntity<UserDto> updateUserById(@RequestBody UserDto userDto, @PathVariable String userId) {
-        return ResponseEntity.status(HttpStatus.OK).body(userService.updateUser(userDto, userId));
+    public ResponseEntity<UserDto> updateUser(
+            @PathVariable String userId,
+            @RequestBody UserDto userDto
+    ) {
+        return ResponseEntity.ok(userService.updateUser(userDto, userId));
+    }
+
+    @DeleteMapping("/{userId}")
+    @PreAuthorize("""
+        hasRole('ADMIN') or
+        @userSecurity.isOwner(#userId)
+    """)
+    public ResponseEntity<Void> deleteUser(@PathVariable String userId) {
+        userService.deleteUser(userId);
+        return ResponseEntity.noContent().build();
     }
 }

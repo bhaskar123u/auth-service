@@ -1,113 +1,98 @@
 package com.bsharan.auth_service.jwtSecurity.jwt;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.Base64;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.GrantedAuthority;
-import org.springframework.stereotype.Service;
-import org.springframework.vault.core.VaultTemplate;
-import org.springframework.vault.support.VaultResponse;
-
-import com.bsharan.auth_service.dtos.JwtLoginResponse;
-import com.bsharan.auth_service.jwtSecurity.userdetails.JwtUserDetails;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
-import lombok.RequiredArgsConstructor;
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
 public class JwtTokenService {
 
-    private final VaultTemplate vaultTemplate;
-    private final ObjectMapper objectMapper;
+    private final RestTemplate restTemplate;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @Value("${jwt.access-token-ttl}")
-    private long accessTokenTtlSeconds;
+    @Value("${spring.cloud.vault.uri}")
+    private String vaultUri;
+
+    @Value("${spring.cloud.vault.token}")
+    private String vaultToken;
 
     @Value("${jwt.signing-key-name}")
-    private String jwtSigningKeyName;
+    private String keyName;
 
-    @Value("${jwt.issuer}")
-    private String jwtIssuer;
+    @Value("${jwt.access-token-ttl}")
+    private long ttlSeconds;
 
-    public JwtLoginResponse createJwtToken(Authentication authentication) {
-        try {
-            // 1. Extract authenticated principal
-            /* org.springframework.security.core.userdetails.User principal =
-                            (org.springframework.security.core.userdetails.User) authentication.getPrincipal(); */
-            JwtUserDetails principal = (JwtUserDetails) authentication.getPrincipal();
-            String email = principal.getUsername();
-            UUID userId = principal.getUserId();
-            List<String> roles = authentication.getAuthorities().stream()
-                    .map(GrantedAuthority::getAuthority)
-                    .toList();
+    public String generateToken(
+            UUID userId,
+            String email,
+            List<String> roles
+    ) throws Exception {
 
-            long now = Instant.now().getEpochSecond();
-            long expiry = now + accessTokenTtlSeconds;
+        Map<String, Object> header = Map.of(
+                "alg", "RS256",
+                "typ", "JWT"
+        );
 
-            // 2. JWT Header
-            Map<String, Object> header = Map.of(
-                    "alg", "RS256",
-                    "typ", "JWT"
-            );
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("sub", userId.toString());
+        payload.put("email", email);
+        payload.put("roles", roles);
+        payload.put("iat", Instant.now().getEpochSecond());
+        payload.put("exp", Instant.now().getEpochSecond() + ttlSeconds);
 
-            // 3. JWT Payload
-            Map<String, Object> payload = Map.of(
-                    "sub", userId,
-                    "email", email,
-                    "roles", roles,
-                    "iat", now,
-                    "exp", expiry,
-                    "iss", jwtIssuer
-            );
+        String headerB64 = base64Url(objectMapper.writeValueAsBytes(header));
+        String payloadB64 = base64Url(objectMapper.writeValueAsBytes(payload));
 
-            // 4. Base64URL encode header & payload
-            String encodedHeader = base64UrlEncode(objectMapper.writeValueAsBytes(header));
-            String encodedPayload = base64UrlEncode(objectMapper.writeValueAsBytes(payload));
+        String signingInput = headerB64 + "." + payloadB64;
 
-            String signingInput = encodedHeader + "." + encodedPayload;
+        String signature = signWithVault(signingInput);
 
-            // 5. Vault expects Base64 (NOT Base64URL)
-            String signingInputBase64 =
-                    Base64.getEncoder().encodeToString(signingInput.getBytes(StandardCharsets.UTF_8));
-
-            Map<String, Object> signRequest = Map.of(
-                    "input", signingInputBase64
-            );
-
-            VaultResponse response = vaultTemplate.write(
-                    "transit/sign/" + jwtSigningKeyName,
-                    signRequest
-            );
-
-            String vaultSignature = (String) response.getData().get("signature");
-
-            // response from vault -> vault:v1:<base64-signature>
-            String base64Signature = vaultSignature.substring("vault:v1:".length());
-
-            // Convert to Base64URL (JWT requirement)
-            String jwtSignature = base64UrlEncode(
-                    Base64.getDecoder().decode(base64Signature)
-            );
-
-            // 6. Final JWT
-            String jwt = encodedHeader + "." + encodedPayload + "." + jwtSignature;
-            return new JwtLoginResponse(jwt, "Bearer", expiry);
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to create JWT", e);
-        }
+        return signingInput + "." + signature;
     }
 
-    private String base64UrlEncode(byte[] data) {
+    public long getExpiryEpochSeconds() {
+        return Instant.now().getEpochSecond() + ttlSeconds;
+    }
+
+    private String signWithVault(String input) {
+
+        String inputB64 = Base64.getEncoder()
+                .encodeToString(input.getBytes(StandardCharsets.UTF_8));
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-Vault-Token", vaultToken);
+
+        Map<String, Object> body = Map.of("input", inputB64);
+
+        HttpEntity<Map<String, Object>> request =
+                new HttpEntity<>(body, headers);
+
+        ResponseEntity<Map> response =
+                restTemplate.postForEntity(
+                        vaultUri + "/v1/transit/sign/" + keyName,
+                        request,
+                        Map.class
+                );
+
+        Map<String, Object> data =
+                (Map<String, Object>) response.getBody().get("data");
+
+        String sig = (String) data.get("signature");
+        return sig.replace("vault:v1:", "");
+    }
+
+    private String base64Url(byte[] bytes) {
         return Base64.getUrlEncoder()
                 .withoutPadding()
-                .encodeToString(data);
+                .encodeToString(bytes);
     }
 }
-

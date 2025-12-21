@@ -1,50 +1,50 @@
 package com.bsharan.auth_service.jwtSecurity.jwt;
 
-import java.io.IOException;
-import java.security.PublicKey;
-import java.util.List;
-import java.util.Set;
-import java.util.UUID;
-import java.util.stream.Collectors;
-
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.stereotype.Component;
-import org.springframework.web.filter.OncePerRequestFilter;
-
-import com.bsharan.auth_service.jwtSecurity.userdetails.JwtUserDetails;
-
-import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.Jwts;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
 
 @Component
 @RequiredArgsConstructor
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
-    private final JwtPublicKeyProvider jwtPublicKeyProvider;
+    private final RestTemplate restTemplate;
+    private final TokenBlacklist tokenBlacklist;
 
-    @Value("${jwt.issuer}")
-    private String jwtIssuer;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Value("${spring.cloud.vault.uri}")
+    private String vaultUri;
+
+    @Value("${spring.cloud.vault.token}")
+    private String vaultToken;
+
+    @Value("${jwt.signing-key-name}")
+    private String keyName;
 
     @Override
     protected void doFilterInternal(
             HttpServletRequest request,
             HttpServletResponse response,
-            FilterChain filterChain)
-            throws ServletException, IOException {
-        SecurityContextHolder.clearContext();
+            FilterChain filterChain
+    ) throws ServletException, IOException {
 
         String authHeader = request.getHeader("Authorization");
-        System.out.println("AUTH HEADER = " + authHeader);
 
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             filterChain.doFilter(request, response);
@@ -53,62 +53,91 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         String jwt = authHeader.substring(7);
 
-        try {
-            Claims claims = parseAndValidate(jwt);
-
-            JwtUserDetails principal = buildPrincipal(claims);
-
-            Authentication authentication = new UsernamePasswordAuthenticationToken(
-                    principal,
-                    null,
-                    principal.getAuthorities());
-
-            SecurityContextHolder.getContext()
-                    .setAuthentication(authentication);
-
-        } catch (Exception ex) {
-            SecurityContextHolder.clearContext();
+        if (tokenBlacklist.isBlacklisted(jwt)) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             return;
         }
 
+        String[] parts = jwt.split("\\.");
+        if (parts.length != 3) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            return;
+        }
+
+        String signingInput = parts[0] + "." + parts[1];
+        String signature = parts[2];
+
+        if (!verifyWithVault(signingInput, signature)) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            return;
+        }
+
+        byte[] payloadBytes;
+        try {
+            payloadBytes = Base64.getUrlDecoder().decode(parts[1]);
+        } catch (IllegalArgumentException ex) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            return;
+        }
+
+        Map<String, Object> claims =
+                objectMapper.readValue(payloadBytes, Map.class);
+
+        String email = (String) claims.get("email");
+        String subject = (String) claims.get("sub");
+        List<String> roles = (List<String>) claims.get("roles");
+
+        if (email == null || roles == null) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            return;
+        }
+
+        List<SimpleGrantedAuthority> authorities =
+        roles.stream()
+                .map(role -> role.startsWith("ROLE_")
+                        ? role
+                        : "ROLE_" + role)
+                .map(SimpleGrantedAuthority::new)
+                .toList();
+
+        UsernamePasswordAuthenticationToken authentication =
+                new UsernamePasswordAuthenticationToken(
+                        email,   // principal = email (important for @PreAuthorize)
+                        null,
+                        authorities
+                );
+
+        SecurityContextHolder.getContext().setAuthentication(authentication);
         filterChain.doFilter(request, response);
     }
-    
-    private Claims parseAndValidate(String jwt) {
 
-        PublicKey publicKey = jwtPublicKeyProvider.getPublicKey();
 
-        Claims claims = Jwts.parserBuilder()
-                .requireIssuer(jwtIssuer)
-                .setSigningKey(publicKey)
-                .build()
-                .parseClaimsJws(jwt)
-                .getBody();
+    private boolean verifyWithVault(String input, String signature) {
 
-        return claims;
-    }
+        String inputB64 = Base64.getEncoder()
+                .encodeToString(input.getBytes(StandardCharsets.UTF_8));
 
-    private JwtUserDetails buildPrincipal(Claims claims) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-Vault-Token", vaultToken);
 
-        UUID userId = UUID.fromString(claims.getSubject());
-        String email = claims.get("email", String.class);
+        Map<String, Object> body = new HashMap<>();
+        body.put("input", inputB64);
+        body.put("signature", "vault:v1:" + signature);
 
-        @SuppressWarnings("unchecked")
-        List<String> roles = claims.get("roles", List.class);
+        HttpEntity<Map<String, Object>> request =
+                new HttpEntity<>(body, headers);
 
-        Set<GrantedAuthority> authorities =
-                roles.stream()
-                    .map(SimpleGrantedAuthority::new)
-                    .collect(Collectors.toSet());
+        ResponseEntity<Map> response =
+                restTemplate.postForEntity(
+                        vaultUri + "/v1/transit/verify/" + keyName,
+                        request,
+                        Map.class
+                );
 
-        return new JwtUserDetails(
-                userId,
-                email,
-                null, // password not needed
-                authorities,
-                true
-        );
+        Map<String, Object> data =
+                (Map<String, Object>) response.getBody().get("data");
+
+        return Boolean.TRUE.equals(data.get("valid"));
     }
 }
-
