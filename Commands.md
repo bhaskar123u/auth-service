@@ -1,0 +1,4 @@
+- lsof -i :8080
+- kill -9 <PID>
+- mvn clean install
+- mvn spring-boot:run
