@@ -573,3 +573,433 @@ Only auth-service instances can: Sign JWT using private key. No sticky sessions.
 Vault should: Generate RSA key pair. Keep private key secret. Expose public key safely
 
 App should: Never generate keys. Never store private key in repo. Only read from Vault
+
+Here’s a **clean, accurate JWT (Vault-backed) request path** you can drop **as-is** into your README.
+No extra theory, no unrelated filters, no confusion.
+
+---
+
+## End-to-End JWT Authentication & Authorization Flow (Vault-Backed)
+
+```text
+Client (Browser / Postman / Service)
+        │
+        │  Authorization: Bearer <JWT>
+        ▼
+┌────────────────────────────────────────────┐
+│ Embedded Tomcat (Servlet Container)         │
+│ - Accepts HTTP request                     │
+│ - Assigns request thread                   │
+└────────────────────────────────────────────┘
+        │
+        ▼
+┌────────────────────────────────────────────┐
+│ DelegatingFilterProxy                      │
+│ - Entry point into Spring Security         │
+│ - Delegates to SecurityFilterChain         │
+└────────────────────────────────────────────┘
+        │
+        ▼
+┌──────────────────────────────────────────────────────────┐
+│ SecurityFilterChain                                      │
+│ (Ordered Spring Security filters)                        │
+└──────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌────────────────────────────────────────────┐
+│ JwtAuthenticationFilter                    │
+│ (OncePerRequestFilter)                     │
+│                                            │
+│ 1. Read Authorization header               │
+│ 2. Extract JWT                             │
+│ 3. Check blacklist (logout)                │
+│ 4. Split JWT → header.payload.signature    │
+│ 5. Verify signature using Vault            │
+│ 6. Decode payload (claims)                 │
+│ 7. Build Authentication                    │
+│ 8. Set SecurityContext                     │
+└────────────────────────────────────────────┘
+        │
+        │   ┌────────────────────────────────────────────┐
+        │   │ Vault Transit (verify)                     │
+        │   │                                            │
+        │   │ Input:                                     │
+        │   │ - base64(signingInput)                     │
+        │   │ - vault:v1:<jwt-signature>                 │
+        │   │                                            │
+        │   │ Output:                                    │
+        │   │ { "valid": true | false }                  │
+        │   └────────────────────────────────────────────┘
+        │
+        ├──► ❌ Invalid / Expired / Blacklisted JWT
+        │       │
+        │       ▼
+        │   ┌────────────────────────────────────────┐
+        │   │ AuthenticationEntryPoint               │
+        │   │ - Returns 401 Unauthorized             │
+        │   │ - Request stops here                   │
+        │   └────────────────────────────────────────┘
+        │
+        └──► ✅ Valid JWT
+                │
+                ▼
+┌──────────────────────────────────────────────────────────┐
+│ SecurityContextHolder (ThreadLocal)                      │
+│ - Stores Authentication for this request                 │
+│ - Principal = email                                      │
+│ - Authorities = roles from JWT                           │
+└──────────────────────────────────────────────────────────┘
+                │
+                ▼
+┌──────────────────────────────────────────────────────────┐
+│ AuthorizationFilter                                      │
+│ - Evaluates access rules                                 │
+│ - Uses Authentication from SecurityContext               │
+│                                                          │
+│ Examples:                                                │
+│ - hasRole('ADMIN')                                       │
+│ - #email == authentication.name                          │
+│ - @PreAuthorize expressions                              │
+└──────────────────────────────────────────────────────────┘
+                │
+        ┌───────┴────────────┐
+        │                    │
+        ▼                    ▼
+❌ Access Denied          ✅ Access Allowed
+│                        │
+│                        ▼
+│        ┌────────────────────────────────────────┐
+│        │ DispatcherServlet                      │
+│        │ - Routes to controller                 │
+│        └────────────────────────────────────────┘
+│                        │
+│                        ▼
+│        ┌────────────────────────────────────────┐
+│        │ @RestController                        │
+│        │ - Business logic                       │
+│        └────────────────────────────────────────┘
+│
+▼
+┌────────────────────────────────────────────────┐
+│ AccessDeniedHandler                            │
+│ - Returns 403 Forbidden                        │
+│ - Authenticated but not authorized             │
+└────────────────────────────────────────────────┘
+```
+
+---
+
+## Login Flow (JWT Issuance)
+
+```text
+Client
+  │
+  │ POST /api/v1/auth/jwt/login
+  │ { email, password }
+  ▼
+┌────────────────────────────────────────┐
+│ UsernamePasswordAuthenticationFilter   │
+│ - Creates unauthenticated token        │
+└────────────────────────────────────────┘
+            │
+            ▼
+┌──────────────────────────────────────────┐
+│ AuthenticationManager                    │
+│ - Delegates to DaoAuthenticationProvider │
+└──────────────────────────────────────────┘
+            │
+            ▼
+┌────────────────────────────────────────┐
+│ UserDetailsService                     │
+│ - Loads user from DB                   │
+└────────────────────────────────────────┘
+            │
+            ▼
+┌────────────────────────────────────────┐
+│ PasswordEncoder (BCrypt)               │
+│ - Verifies password                    │
+└────────────────────────────────────────┘
+            │
+            ▼
+┌────────────────────────────────────────┐
+│ JwtTokenService                        │
+│ - Builds header + payload              │
+│ - Signs payload using Vault            │
+│ - Returns JWT                          │
+└────────────────────────────────────────┘
+```
+
+---
+
+## Security filter chain involved in JWT based auth
+
+### 1. DisableEncodeUrlFilter
+
+**Input**
+
+* `HttpServletRequest`
+* `HttpServletResponse`
+
+**What it does**
+
+* Ensures session IDs are **not encoded into URLs** (`;jsessionid=...`)
+* Enforces cookie-only session tracking
+
+**Output**
+
+* Same request/response (unchanged)
+* URL encoding disabled for downstream filters
+
+---
+
+### 2. WebAsyncManagerIntegrationFilter
+
+**Input**
+
+* Request
+* Empty or existing `SecurityContext`
+
+**What it does**
+
+* Registers hooks so **SecurityContext is propagated** to async threads
+
+**Output**
+
+* Request augmented with async context support
+* `SecurityContext` ready for async execution
+
+---
+
+### 3. SecurityContextHolderFilter
+
+**Input**
+
+* Request
+* Thread without security context
+
+**What it does**
+
+* Creates or restores a `SecurityContext`
+* Binds it to the current thread (`ThreadLocal`)
+
+**Output**
+
+* `SecurityContextHolder.getContext()` is now available
+* Authentication is still `null` at this point
+
+---
+
+### 4. HeaderWriterFilter
+
+**Input**
+
+* Request
+* Response
+
+**What it does**
+
+* Writes security headers (if applicable):
+
+  * HSTS
+  * X-Frame-Options
+  * X-Content-Type-Options
+* Decision may depend on request (HTTP vs HTTPS)
+
+**Output**
+
+* Response enriched with security headers
+* Request unchanged
+
+---
+
+### 5. LogoutFilter
+
+**Input**
+
+* Request
+* Current `SecurityContext`
+
+**What it does**
+
+* Checks if request matches `/logout`
+* If matched:
+
+  * Clears `SecurityContext`
+  * Invalidates session (if any)
+
+**Output**
+
+* If NOT `/logout` → request passed unchanged
+* If `/logout` → response committed, filter chain stops
+
+---
+
+### 6. JwtAuthenticationFilter **(Your Custom Filter)**
+
+**Input**
+
+* Request headers (`Authorization: Bearer <JWT>`)
+* Empty `SecurityContext`
+
+**What it does**
+
+1. Extracts JWT from header
+2. Splits JWT → header + payload + signature
+3. Sends signing input + signature to **Vault**
+4. Vault returns `{ valid: true/false }`
+5. If valid:
+
+   * Decodes payload
+   * Extracts claims (email, roles, userId)
+   * Builds `Authentication` object
+
+**Output**
+
+* On success:
+
+  * `SecurityContextHolder` populated with `Authentication`
+* On failure:
+
+  * No authentication set (continues as anonymous)
+
+---
+
+### 7. RequestCacheAwareFilter
+
+**Input**
+
+* Request
+* Possibly authenticated `SecurityContext`
+
+**What it does**
+
+* Handles saved requests (used mainly for browser redirects)
+* Mostly a **no-op for REST APIs**
+
+**Output**
+
+* Request passed forward unchanged
+
+---
+
+### 8. SecurityContextHolderAwareRequestFilter
+
+**Input**
+
+* Request
+* Populated `SecurityContext`
+
+**What it does**
+
+* Wraps `HttpServletRequest`
+* Enables:
+
+  * `request.getUserPrincipal()`
+  * `request.isUserInRole()`
+
+**Output**
+
+* Wrapped request with security-aware methods
+
+---
+
+### 9. AnonymousAuthenticationFilter
+
+**Input**
+
+* Request
+* `SecurityContext`
+
+**What it does**
+
+* If **no Authentication present**:
+
+  * Injects `AnonymousAuthenticationToken`
+* If Authentication exists:
+
+  * Does nothing
+
+**Output**
+
+* `SecurityContext` always has *some* Authentication
+
+  * Either real user or anonymous
+
+---
+
+### 10. SessionManagementFilter
+
+**Input**
+
+* Request
+* Authentication
+
+**What it does**
+
+* Applies session rules:
+
+  * Stateless vs stateful
+  * Session fixation protection
+* In JWT stateless mode → minimal work
+
+**Output**
+
+* Authentication preserved
+* Session rules enforced
+
+---
+
+### 11. ExceptionTranslationFilter
+
+**Input**
+
+* Downstream exceptions
+* Current Authentication state
+
+**What it does**
+
+* Catches security exceptions:
+
+  * `AuthenticationException` → 401
+  * `AccessDeniedException` → 403
+
+**Output**
+
+* Converts exceptions into HTTP responses
+* Stops filter chain if triggered
+
+---
+
+### 12. AuthorizationFilter
+
+**Input**
+
+* Request
+* Fully populated `SecurityContext`
+* Authorization rules
+
+**What it does**
+
+* Evaluates access:
+
+  * `.authenticated()`
+  * `hasRole(...)`
+  * `@PreAuthorize` expressions
+
+**Output**
+
+* ✅ Allowed → request reaches controller
+* ❌ Denied → throws `AccessDeniedException`
+
+---
+
+### Debugging Cheat Sheet
+
+| Symptom                              | Where to Look                        |
+| ------------------------------------ | ------------------------------------ |
+| 401                                  | JwtAuthenticationFilter / Vault      |
+| 403                                  | AuthorizationFilter / @PreAuthorize  |
+| Works in filter, fails in controller | Method-level security                |
+| Anonymous user appears               | JWT filter didn’t set Authentication |
+
+---
