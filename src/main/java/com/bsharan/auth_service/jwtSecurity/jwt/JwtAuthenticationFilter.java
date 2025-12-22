@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
+import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -47,29 +48,26 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String authHeader = request.getHeader("Authorization");
 
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            filterChain.doFilter(request, response);
-            return;
+            throw new org.springframework.security.authentication.AuthenticationCredentialsNotFoundException(
+            "JWT token is missing");
         }
 
         String jwt = authHeader.substring(7);
 
         if (tokenBlacklist.isBlacklisted(jwt)) {
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            return;
+            throw new InsufficientAuthenticationException("Token is revoked");
         }
 
         String[] parts = jwt.split("\\.");
         if (parts.length != 3) {
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            return;
+            throw new InsufficientAuthenticationException("Malformed JWT");
         }
 
         String signingInput = parts[0] + "." + parts[1];
         String signature = parts[2];
 
         if (!verifyWithVault(signingInput, signature)) {
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            return;
+            throw new InsufficientAuthenticationException("Invalid JWT signature");
         }
 
         byte[] payloadBytes;
@@ -114,30 +112,34 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private boolean verifyWithVault(String input, String signature) {
 
-        String inputB64 = Base64.getEncoder()
-                .encodeToString(input.getBytes(StandardCharsets.UTF_8));
+            String inputB64 = Base64.getEncoder()
+                            .encodeToString(input.getBytes(StandardCharsets.UTF_8));
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.set("X-Vault-Token", vaultToken);
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("X-Vault-Token", vaultToken);
 
-        Map<String, Object> body = new HashMap<>();
-        body.put("input", inputB64);
-        body.put("signature", "vault:v1:" + signature);
+            Map<String, Object> body = new HashMap<>();
+            body.put("input", inputB64);
+            body.put("signature", "vault:v1:" + signature);
 
-        HttpEntity<Map<String, Object>> request =
-                new HttpEntity<>(body, headers);
+            HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
 
-        ResponseEntity<Map> response =
-                restTemplate.postForEntity(
-                        vaultUri + "/v1/transit/verify/" + keyName,
-                        request,
-                        Map.class
-                );
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                            vaultUri + "/v1/transit/verify/" + keyName,
+                            request,
+                            Map.class);
 
-        Map<String, Object> data =
-                (Map<String, Object>) response.getBody().get("data");
+            Map<String, Object> data = (Map<String, Object>) response.getBody().get("data");
 
-        return Boolean.TRUE.equals(data.get("valid"));
+            return Boolean.TRUE.equals(data.get("valid"));
+    }
+    
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        String path = request.getRequestURI();
+
+        return path.equals("/api/v1/auth/register")
+                || path.equals("/api/v1/auth/jwt/login");
     }
 }

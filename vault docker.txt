@@ -1,0 +1,73 @@
+                                                  Vault docker setup
+
+                                                  Create a Docker volume
+docker volume create vault-data
+
+                                                  Create docker container with docker volume mounted
+docker run -d \
+  --name vault \
+  -p 8200:8200 \
+  -e VAULT_DEV_ROOT_TOKEN_ID=bsharan \
+  -e VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200 \
+  -v vault-data:/vault/file \
+  hashicorp/vault:1.15
+
+
+                                                  Check if vault is started
+bhaskarsharan@Bhaskars-MacBook-Pro ~ % docker ps
+CONTAINER ID   IMAGE                  COMMAND                  CREATED          STATUS          PORTS                                         NAMES
+d4b39af51d78   hashicorp/vault:1.15   "docker-entrypoint.s…"   10 minutes ago   Up 10 minutes   0.0.0.0:8200->8200/tcp, [::]:8200->8200/tcp   vault
+4a4712cffef1   mysql:8.0              "docker-entrypoint.s…"   6 days ago       Up 54 minutes   0.0.0.0:3306->3306/tcp, [::]:3306->3306/tcp   mysql-server
+
+                                                  Enter in vault container
+bhaskarsharan@Bhaskars-MacBook-Pro ~ % docker exec -it vault sh
+/ #
+
+                                                  Tell Vault CLI to use HTTP
+/ # export VAULT_ADDR=http://127.0.0.1:8200
+
+                                                  Login
+/ # vault login bsharan
+Success! You are now authenticated. The token information displayed below
+...
+
+                                          Set credentials and verify - put secrets for your Spring Boot app
+vault kv put secret/auth-service - <<EOF
+{
+  "spring.datasource.username": "bsharan",
+  "spring.datasource.password": "@GH72DBUW^@@&#NSsajzJI#$",
+  "spring.datasource.url": "jdbc:mysql://127.0.0.1:3306/auth_service"
+}
+EOF
+...
+
+                                                  Check credentials
+/ # vault kv get secret/auth-service
+...
+
+                                                  Enable Transit Engine (crypto engine)
+/ # vault secrets enable transit
+Success! Enabled the transit secrets engine at: transit/
+
+                                                  Create an RSA key for JWT signing
+/ # vault write transit/keys/jwt-signing-key \
+type=rsa-2048 \
+exportable=true
+...
+
+
+                                                  Verify key creation
+/ # vault read transit/keys/jwt-signing-key
+...
+
+                                                  Export public key
+/ # vault read transit/export/public-key/jwt-signing-key
+...
+
+                                                  Add JWT related values
+vault kv patch secret/auth-service \
+  jwt.access-token-ttl="900" \
+  jwt.signing-key-name="jwt-signing-key" \
+  jwt.issuer="auth-service"
+
+verify using - vault kv get secret/auth-service

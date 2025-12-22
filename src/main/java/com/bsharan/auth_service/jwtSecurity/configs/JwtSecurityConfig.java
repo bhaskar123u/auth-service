@@ -41,13 +41,15 @@ public class JwtSecurityConfig {
         return http
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(sm ->
-                        sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .anonymous(anonymous -> anonymous.disable())
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
                                 "/api/v1/auth/jwt/login",
                                 "/api/v1/auth/jwt/logout",
                                 "/api/v1/auth/register"
                         ).permitAll()
+                        // permitAll() affects ONLY the AuthorizationFilter. It does NOT stop custom JwtAuthenticationFilter from running.
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(
@@ -55,7 +57,7 @@ public class JwtSecurityConfig {
                         UsernamePasswordAuthenticationFilter.class
                 )
                 .exceptionHandling(ex -> ex
-                    // 401 - not logged in
+                    // 401 - not authenticated
                     .authenticationEntryPoint((request, response, authException) -> {
                         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                         response.setContentType("application/json");
@@ -63,24 +65,23 @@ public class JwtSecurityConfig {
                         response.getWriter().write("""
                             {
                             "status": 401,
-                            "message": "(JwtAuthenticationFilter) Please login to access this resource"
+                            "error": "AUTH_REQUIRED",
+                            "message": "%s"
                             }
-                        """);
+                        """.formatted(authException.getMessage()));
                     })
-
-                    // 403 - logged in but not allowed
+                    // 403 - authenticated but forbidden
                     .accessDeniedHandler((request, response, accessDeniedException) -> {
                         response.setStatus(HttpServletResponse.SC_FORBIDDEN);
                         response.setContentType("application/json");
 
-                        String apiPath = request.getRequestURI();
-
                         response.getWriter().write("""
                             {
                             "status": 403,
-                            "message": "(JwtAuthenticationFilter) You are not authorized to access this API: %s"
+                            "error": "ACCESS_DENIED",
+                            "message": "You are not authorized to access this resource"
                             }
-                        """.formatted(apiPath));
+                        """);
                     })
                 )
                 .build();
